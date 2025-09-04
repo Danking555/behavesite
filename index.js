@@ -234,16 +234,63 @@ app.get('/', (req, res) => {
             const method = log.method || 'UNKNOWN';
             const url = log.url || 'N/A';
             
-            logEntry.innerHTML = '[' + timestamp + '] [' + method + '] ' + url;
+            let displayMessage = '[' + timestamp + '] [' + method + '] ' + url;
+            let hasDetailedData = false;
+            let detailedData = null;
+            
             if (log.body) {
               try {
                 const bodyData = JSON.parse(log.body);
                 if (bodyData.message) {
-                  logEntry.innerHTML += ' - ' + bodyData.message;
+                  displayMessage += ' - ' + bodyData.message;
+                  
+                  // Check if this is a debug log with detailed data
+                  if (bodyData.data && bodyData.message.includes('Full') && bodyData.message.includes('event data')) {
+                    hasDetailedData = true;
+                    detailedData = bodyData.data;
+                  }
                 }
               } catch (e) {
                 // Ignore JSON parse errors for non-JSON body content
               }
+            }
+            
+            // Add expandable data section for logs with detailed data
+            if (hasDetailedData && detailedData) {
+              const dataId = 'data-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+              const toggleButton = document.createElement('span');
+              toggleButton.innerHTML = ' [Show Details]';
+              toggleButton.style.cursor = 'pointer';
+              toggleButton.style.color = '#007bff';
+              toggleButton.style.textDecoration = 'underline';
+              
+              const dataDiv = document.createElement('div');
+              dataDiv.id = dataId;
+              dataDiv.style.display = 'none';
+              dataDiv.style.marginTop = '5px';
+              dataDiv.style.padding = '5px';
+              dataDiv.style.backgroundColor = '#f8f9fa';
+              dataDiv.style.border = '1px solid #dee2e6';
+              dataDiv.style.borderRadius = '3px';
+              dataDiv.style.fontSize = '10px';
+              dataDiv.style.whiteSpace = 'pre-wrap';
+              dataDiv.innerHTML = JSON.stringify(detailedData, null, 2);
+              
+              toggleButton.onclick = function() {
+                if (dataDiv.style.display === 'none') {
+                  dataDiv.style.display = 'block';
+                  toggleButton.innerHTML = ' [Hide Details]';
+                } else {
+                  dataDiv.style.display = 'none';
+                  toggleButton.innerHTML = ' [Show Details]';
+                }
+              };
+              
+              logEntry.appendChild(document.createTextNode(displayMessage));
+              logEntry.appendChild(toggleButton);
+              logEntry.appendChild(dataDiv);
+            } else {
+              logEntry.innerHTML = displayMessage;
             }
             
             logsContainer.appendChild(logEntry);
