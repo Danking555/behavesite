@@ -63,10 +63,21 @@ app.get('/', (req, res) => {
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Home</title>
+  <title>Behavioral Telemetry Logger</title>
 </head>
 <body>
-  <h1>HTTP Request Logger</h1>
+  <h1>Behavioral Telemetry Logger</h1>
+  
+  <!-- Logs Display Section -->
+  <div style="margin: 20px 0; padding: 20px; border: 2px solid #007bff; border-radius: 8px; max-width: 800px;">
+    <h3>Real-time Logs</h3>
+    <div id="logsContainer" style="background-color: #f8f9fa; padding: 15px; border-radius: 4px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px;">
+      <div>Loading logs...</div>
+    </div>
+    <button id="refreshLogs" style="margin-top: 10px; background-color: #28a745; color: white; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">
+      Refresh Logs
+    </button>
+  </div>
   
   <!-- Login Form with Bot Detection -->
   <div style="margin: 20px 0; padding: 20px; border: 2px solid #ccc; border-radius: 8px; max-width: 400px;">
@@ -93,6 +104,166 @@ app.get('/', (req, res) => {
   <script>
   // Bot Detection Script
   (function() {
+    // Logging functions
+    function logToPage(message, type = 'info', data = null) {
+      const logsContainer = document.getElementById('logsContainer');
+      const timestamp = new Date().toLocaleTimeString();
+      const logEntry = document.createElement('div');
+      logEntry.style.marginBottom = '5px';
+      logEntry.style.padding = '3px 6px';
+      logEntry.style.borderRadius = '3px';
+      
+      // Color coding based on type
+      switch(type) {
+        case 'error':
+          logEntry.style.backgroundColor = '#f8d7da';
+          logEntry.style.color = '#721c24';
+          break;
+        case 'warning':
+          logEntry.style.backgroundColor = '#fff3cd';
+          logEntry.style.color = '#856404';
+          break;
+        case 'success':
+          logEntry.style.backgroundColor = '#d4edda';
+          logEntry.style.color = '#155724';
+          break;
+        case 'debug':
+          logEntry.style.backgroundColor = '#e2e3e5';
+          logEntry.style.color = '#383d41';
+          break;
+        default:
+          logEntry.style.backgroundColor = '#d1ecf1';
+          logEntry.style.color = '#0c5460';
+      }
+      
+      let displayMessage = '[' + timestamp + '] [' + type.toUpperCase() + '] ' + message;
+      
+      // Add expandable data section for debug logs
+      if (data && type === 'debug') {
+        const dataId = 'data-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        const toggleButton = document.createElement('span');
+        toggleButton.innerHTML = ' [Show Details]';
+        toggleButton.style.cursor = 'pointer';
+        toggleButton.style.color = '#007bff';
+        toggleButton.style.textDecoration = 'underline';
+        
+        const dataDiv = document.createElement('div');
+        dataDiv.id = dataId;
+        dataDiv.style.display = 'none';
+        dataDiv.style.marginTop = '5px';
+        dataDiv.style.padding = '5px';
+        dataDiv.style.backgroundColor = '#f8f9fa';
+        dataDiv.style.border = '1px solid #dee2e6';
+        dataDiv.style.borderRadius = '3px';
+        dataDiv.style.fontSize = '10px';
+        dataDiv.style.whiteSpace = 'pre-wrap';
+        dataDiv.innerHTML = JSON.stringify(data, null, 2);
+        
+        toggleButton.onclick = function() {
+          if (dataDiv.style.display === 'none') {
+            dataDiv.style.display = 'block';
+            toggleButton.innerHTML = ' [Hide Details]';
+          } else {
+            dataDiv.style.display = 'none';
+            toggleButton.innerHTML = ' [Show Details]';
+          }
+        };
+        
+        logEntry.appendChild(document.createTextNode(displayMessage));
+        logEntry.appendChild(toggleButton);
+        logEntry.appendChild(dataDiv);
+      } else {
+        logEntry.innerHTML = displayMessage;
+      }
+      
+      logsContainer.insertBefore(logEntry, logsContainer.firstChild);
+      
+      // Keep only last 100 log entries
+      while (logsContainer.children.length > 100) {
+        logsContainer.removeChild(logsContainer.lastChild);
+      }
+    }
+    
+    function logToDatabase(type, message, data = null) {
+      fetch('/api/logs', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          type,
+          message,
+          data,
+          timestamp: new Date().toISOString()
+        })
+      }).catch(err => console.error('Failed to log to database:', err));
+    }
+    
+    function logEverywhere(type, message, data = null) {
+      // Log to console (existing behavior)
+      console.log('[' + type + '] ' + message, data);
+      
+      // Log to page
+      logToPage(message, type, data);
+      
+      // Log to database
+      logToDatabase(type, message, data);
+    }
+    
+    function loadLogs() {
+      fetch('/api/logs?limit=20')
+        .then(response => response.json())
+        .then(logs => {
+          const logsContainer = document.getElementById('logsContainer');
+          logsContainer.innerHTML = '';
+          
+          if (logs.length === 0) {
+            logsContainer.innerHTML = '<div>No logs available</div>';
+            return;
+          }
+          
+          logs.forEach(log => {
+            const logEntry = document.createElement('div');
+            logEntry.style.marginBottom = '5px';
+            logEntry.style.padding = '3px 6px';
+            logEntry.style.borderRadius = '3px';
+            logEntry.style.backgroundColor = '#e9ecef';
+            logEntry.style.color = '#495057';
+            
+            const timestamp = new Date(log.timestamp).toLocaleString();
+            const method = log.method || 'UNKNOWN';
+            const url = log.url || 'N/A';
+            
+            logEntry.innerHTML = '[' + timestamp + '] [' + method + '] ' + url;
+            if (log.body) {
+              try {
+                const bodyData = JSON.parse(log.body);
+                if (bodyData.message) {
+                  logEntry.innerHTML += ' - ' + bodyData.message;
+                }
+              } catch (e) {
+                // Ignore JSON parse errors for non-JSON body content
+              }
+            }
+            
+            logsContainer.appendChild(logEntry);
+          });
+        })
+        .catch(err => {
+          console.error('Failed to load logs:', err);
+          document.getElementById('logsContainer').innerHTML = '<div style="color: red;">Failed to load logs</div>';
+        });
+    }
+    
+    // Set up refresh button
+    document.addEventListener('DOMContentLoaded', () => {
+      const refreshBtn = document.getElementById('refreshLogs');
+      if (refreshBtn) {
+        refreshBtn.addEventListener('click', loadLogs);
+      }
+      // Load initial logs
+      loadLogs();
+    });
     const username = document.getElementById("username");
     const password = document.getElementById("password");
     const loginBtn = document.getElementById("loginBtn");
@@ -169,12 +340,9 @@ app.get('/', (req, res) => {
       keyEvents.push(eventData);
       
       // Log comprehensive event information
-      console.log("=== KEYBOARD EVENT DETAILS ===");
-      console.log("Key:", event.key, "Code:", event.code, "at", new Date().toISOString());
-      console.log("Synthetic:", syntheticInfo.isSynthetic, "Trust:", syntheticInfo.trustLevel);
-      console.log("Full Event Object:", event);
-      console.log("Event Data:", eventData);
-      console.log("================================");
+      logEverywhere("info", "Keyboard event: " + event.key + " (" + event.code + ") at " + new Date().toISOString());
+      logEverywhere("info", "Synthetic: " + syntheticInfo.isSynthetic + ", Trust: " + syntheticInfo.trustLevel);
+      logEverywhere("debug", "Full keyboard event data", eventData);
     }
     
     username.addEventListener("keydown", trackKey);
@@ -234,12 +402,9 @@ app.get('/', (req, res) => {
       clickEvents.push(eventData);
       
       // Log comprehensive event information
-      console.log("=== MOUSE CLICK EVENT DETAILS ===");
-      console.log("Click at:", e.clientX, e.clientY, "on", e.target.id || e.target.tagName);
-      console.log("Synthetic:", syntheticInfo.isSynthetic, "Trust:", syntheticInfo.trustLevel);
-      console.log("Full Event Object:", e);
-      console.log("Event Data:", eventData);
-      console.log("==================================");
+      logEverywhere("info", "Mouse click at (" + e.clientX + ", " + e.clientY + ") on " + (e.target.id || e.target.tagName));
+      logEverywhere("info", "Synthetic: " + syntheticInfo.isSynthetic + ", Trust: " + syntheticInfo.trustLevel);
+      logEverywhere("debug", "Full mouse click event data", eventData);
     });
     
     // On form submit, check behavior
@@ -248,13 +413,13 @@ app.get('/', (req, res) => {
       
       if (!userTyped || !userClicked) {
         alert("⚠️ Possible bot detected: no real typing or clicking.");
-        console.warn("Bot-like behavior detected.");
+        logEverywhere("warning", "Bot-like behavior detected - no real typing or clicking");
         document.getElementById("loginStatus").innerHTML = 
           '<span style="color: red;">Bot detected - Login blocked</span>';
       } else {
-        console.log("User likely human ✅");
-        console.log("Key events:", keyEvents);
-        console.log("Click events:", clickEvents);
+        logEverywhere("success", "User likely human - login successful");
+        logEverywhere("info", "Key events captured: " + keyEvents.length, keyEvents);
+        logEverywhere("info", "Click events captured: " + clickEvents.length, clickEvents);
         document.getElementById("loginStatus").innerHTML = 
           '<span style="color: green;">Human verified - Login successful</span>';
         
@@ -329,6 +494,41 @@ app.get('/', (req, res) => {
   res.send(html);
 });
 
+// API endpoint to fetch recent logs
+app.get('/api/logs', (req, res) => {
+  const limit = parseInt(req.query.limit) || 50;
+  db.all(
+    `SELECT * FROM logs ORDER BY timestamp DESC LIMIT ?`,
+    [limit],
+    (err, rows) => {
+      if (err) {
+        console.error('Error fetching logs:', err);
+        res.status(500).json({ error: 'Failed to fetch logs' });
+      } else {
+        res.json(rows);
+      }
+    }
+  );
+});
+
+// API endpoint to receive client-side logs
+app.post('/api/logs', (req, res) => {
+  const { type, message, data, timestamp } = req.body;
+  const logMessage = `[${type}] ${message}`;
+  const logData = JSON.stringify({ message, data, timestamp });
+  
+  // Log to database
+  db.run(
+    `INSERT INTO logs(method,url,headers,body,timestamp) VALUES(?,?,?,?,?)`,
+    ['CLIENT_LOG', '/api/logs', '{}', logData, timestamp || new Date().toISOString()]
+  );
+  
+  // Log to console
+  console.log(logMessage, data);
+  
+  res.json({ success: true });
+});
+
 // WebSocket server for fingerprint messages
 const wss = new WebSocket.Server({ server });
 wss.on('connection', ws => {
@@ -347,6 +547,7 @@ wss.on('connection', ws => {
           botDetection: data.botDetection,
           timestamp: ts
         });
+        console.log('[FINGERPRINT] Received from ' + origin + ' - Bot Detection: ' + (data.botDetection && data.botDetection.humanVerified ? 'Human' : 'Unknown'));
       }
     } catch (e) {
       console.error('WS parse error:', e);
