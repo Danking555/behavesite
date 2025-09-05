@@ -161,6 +161,12 @@ app.get('/', (req, res) => {
     button:hover {
       background-color: #218838;
     }
+    #clearDatabase {
+      background-color: #dc3545 !important;
+    }
+    #clearDatabase:hover {
+      background-color: #c82333 !important;
+    }
     .log-entry {
       margin: 2px 0;
       padding: 4px 8px;
@@ -230,6 +236,7 @@ app.get('/', (req, res) => {
         <option value="7d">Last 7 Days</option>
       </select>
       <button id="refreshLogs">Refresh Logs</button>
+      <button id="clearDatabase">Clear Database</button>
     </div>
     
     <div id="logsContainer">
@@ -332,7 +339,14 @@ app.get('/', (req, res) => {
             
             let displayMessage = '[' + timestamp + '] [' + type.toUpperCase() + '] ' + message;
             
-            if (logData && type === 'debug') {
+            // Add isTrusted information if available in logData (for backward compatibility)
+            if (logData && typeof logData.isTrusted !== 'undefined' && !message.includes('Trusted:')) {
+              const trustStatus = logData.isTrusted ? 'TRUSTED' : 'UNTRUSTED';
+              const trustColor = logData.isTrusted ? '#28a745' : '#dc3545';
+              displayMessage += ' <span style="color: ' + trustColor + '; font-weight: bold;">[' + trustStatus + ']</span>';
+            }
+            
+            if (logData && (type === 'debug' || type === 'info')) {
               // Create expandable section for debug logs
               const showDetailsBtn = document.createElement('button');
               showDetailsBtn.textContent = '[Show Details]';
@@ -401,6 +415,31 @@ app.get('/', (req, res) => {
     
     // Time range selector
     document.getElementById('timeRange').addEventListener('change', loadLogs);
+    
+    // Clear database button
+    document.getElementById('clearDatabase').addEventListener('click', function() {
+      if (confirm('Are you sure you want to clear all logs from the database? This action cannot be undone.')) {
+        fetch('/api/logs', {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+          }
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            alert('Database cleared successfully!');
+            loadLogs(); // Refresh the logs display
+          } else {
+            alert('Failed to clear database: ' + (data.error || 'Unknown error'));
+          }
+        })
+        .catch(err => {
+          console.error('Error clearing database:', err);
+          alert('Failed to clear database: ' + err.message);
+        });
+      }
+    });
   })();
   </script>
 </body>
@@ -576,42 +615,22 @@ app.get('/login', (req, res) => {
     const keyEvents = []; // Store key press events
     const clickEvents = []; // Store mouse click events
     
-    // Function to detect synthetic events
-    function isSyntheticEvent(event) {
-      const synthetic = {
-        isTrusted: event.isTrusted === false, // false means synthetic
-        detail: event.detail === 0, // 0 often indicates synthetic
-        timeStamp: event.timeStamp === 0, // 0 often indicates synthetic
-        bubbles: event.bubbles === false, // some synthetic events don't bubble
-        cancelable: event.cancelable === false, // some synthetic events aren't cancelable
-        eventPhase: event.eventPhase === 0, // 0 = none phase
-        hasPointerCoords: event.clientX === 0 && event.clientY === 0, // synthetic mouse events often at 0,0
-        hasKeyData: event.key === undefined || event.code === undefined // synthetic key events may lack data
-      };
-      
-      return {
-        isSynthetic: !event.isTrusted || event.detail === 0 || event.timeStamp === 0,
-        syntheticFlags: synthetic,
-        confidence: Object.values(synthetic).filter(Boolean).length,
-        trustLevel: event.isTrusted ? 'trusted' : 'untrusted'
-      };
-    }
     
-    // Track key presses with timestamp and synthetic detection
+    // Track key presses
     function trackKey(event) {
       console.log('KEYBOARD EVENT DETECTED:', event.type, event.key, event.code);
       userTyped = true;
-      const syntheticInfo = isSyntheticEvent(event);
       
       // Create comprehensive event data
       const eventData = {
+        type: event.type,
         key: event.key,
         code: event.code,
         keyCode: event.keyCode,
         which: event.which,
+        charCode: event.charCode,
         timestamp: Date.now(),
         isTrusted: event.isTrusted,
-        synthetic: syntheticInfo,
         target: event.target.id || event.target.tagName,
         // Additional key-specific properties
         altKey: event.altKey,
@@ -620,32 +639,28 @@ app.get('/login', (req, res) => {
         metaKey: event.metaKey,
         repeat: event.repeat,
         location: event.location,
-        // Full event object for debugging
-        fullEvent: {
-          type: event.type,
-          bubbles: event.bubbles,
-          cancelable: event.cancelable,
-          defaultPrevented: event.defaultPrevented,
-          eventPhase: event.eventPhase,
-          timeStamp: event.timeStamp,
-          detail: event.detail,
-          view: event.view ? 'window' : 'null',
-          currentTarget: event.currentTarget ? event.currentTarget.tagName : 'null',
-          target: event.target ? event.target.tagName : 'null',
-          srcElement: event.srcElement ? event.srcElement.tagName : 'null',
-          returnValue: event.returnValue,
-          cancelBubble: event.cancelBubble,
-          composed: event.composed,
-          isTrusted: event.isTrusted
-        }
+        isComposing: event.isComposing,
+        // Event behavior properties
+        bubbles: event.bubbles,
+        cancelable: event.cancelable,
+        defaultPrevented: event.defaultPrevented,
+        cancelBubble: event.cancelBubble,
+        composed: event.composed,
+        returnValue: event.returnValue,
+        eventPhase: event.eventPhase,
+        timeStamp: event.timeStamp,
+        detail: event.detail,
+        // Target information
+        currentTarget: event.currentTarget ? event.currentTarget.tagName : null,
+        srcElement: event.srcElement ? event.srcElement.tagName : null,
+        view: event.view ? 'window' : null
       };
       
       keyEvents.push(eventData);
       
       // Log comprehensive event information
-      logEverywhere("info", "Keyboard event: " + event.key + " (" + event.code + ") at " + new Date().toISOString());
-      logEverywhere("info", "Synthetic: " + syntheticInfo.isSynthetic + ", Trust: " + syntheticInfo.trustLevel);
-      logEverywhere("debug", "Full keyboard event data", eventData);
+      const eventSummary = event.type.toUpperCase() + " - Key: " + event.key + " (" + event.code + ") on " + (event.target.id || event.target.tagName) + " - Trusted: " + event.isTrusted;
+      logEverywhere("info", eventSummary, eventData);
     }
     
     // Track keyboard events on ALL elements
@@ -653,13 +668,13 @@ app.get('/login', (req, res) => {
     document.addEventListener("keyup", trackKey);
     document.addEventListener("keypress", trackKey);
     
-    // Track ALL mouse events with synthetic detection
+    // Track mouse events
     document.addEventListener("mousedown", (e) => {
       userClicked = true;
-      const syntheticInfo = isSyntheticEvent(e);
       
       // Create comprehensive event data
       const eventData = {
+        type: e.type,
         x: e.clientX,
         y: e.clientY,
         target: e.target.id || e.target.tagName,
@@ -667,7 +682,6 @@ app.get('/login', (req, res) => {
         button: e.button,
         buttons: e.buttons,
         isTrusted: e.isTrusted,
-        synthetic: syntheticInfo,
         detail: e.detail,
         eventPhase: e.eventPhase,
         // Additional mouse-specific properties
@@ -683,40 +697,32 @@ app.get('/login', (req, res) => {
         ctrlKey: e.ctrlKey,
         shiftKey: e.shiftKey,
         metaKey: e.metaKey,
-        // Full event object for debugging
-        fullEvent: {
-          type: e.type,
-          bubbles: e.bubbles,
-          cancelable: e.cancelable,
-          defaultPrevented: e.defaultPrevented,
-          eventPhase: e.eventPhase,
-          timeStamp: e.timeStamp,
-          detail: e.detail,
-          view: e.view ? 'window' : 'null',
-          currentTarget: e.currentTarget ? e.currentTarget.tagName : 'null',
-          target: e.target ? e.target.tagName : 'null',
-          srcElement: e.srcElement ? e.srcElement.tagName : 'null',
-          returnValue: e.returnValue,
-          cancelBubble: e.cancelBubble,
-          composed: e.composed,
-          isTrusted: e.isTrusted,
-          relatedTarget: e.relatedTarget ? e.relatedTarget.tagName : 'null'
-        }
+        // Event behavior properties
+        bubbles: e.bubbles,
+        cancelable: e.cancelable,
+        defaultPrevented: e.defaultPrevented,
+        cancelBubble: e.cancelBubble,
+        composed: e.composed,
+        returnValue: e.returnValue,
+        timeStamp: e.timeStamp,
+        // Target information
+        currentTarget: e.currentTarget ? e.currentTarget.tagName : null,
+        srcElement: e.srcElement ? e.srcElement.tagName : null,
+        view: e.view ? 'window' : null,
+        relatedTarget: e.relatedTarget ? e.relatedTarget.tagName : null
       };
       
       clickEvents.push(eventData);
       
       // Log comprehensive event information
-      logEverywhere("info", "Mouse down at (" + e.clientX + ", " + e.clientY + ") on " + (e.target.id || e.target.tagName));
-      logEverywhere("info", "Synthetic: " + syntheticInfo.isSynthetic + ", Trust: " + syntheticInfo.trustLevel);
-      logEverywhere("debug", "Full mouse down event data", eventData);
+      const eventSummary = e.type.toUpperCase() + " - Position: (" + e.clientX + ", " + e.clientY + ") on " + (e.target.id || e.target.tagName) + " - Trusted: " + e.isTrusted;
+      logEverywhere("info", eventSummary, eventData);
     });
 
     document.addEventListener("mouseup", (e) => {
-      const syntheticInfo = isSyntheticEvent(e);
-      
       // Create comprehensive event data
       const eventData = {
+        type: e.type,
         x: e.clientX,
         y: e.clientY,
         target: e.target.id || e.target.tagName,
@@ -724,7 +730,6 @@ app.get('/login', (req, res) => {
         button: e.button,
         buttons: e.buttons,
         isTrusted: e.isTrusted,
-        synthetic: syntheticInfo,
         detail: e.detail,
         eventPhase: e.eventPhase,
         // Additional mouse-specific properties
@@ -740,40 +745,33 @@ app.get('/login', (req, res) => {
         ctrlKey: e.ctrlKey,
         shiftKey: e.shiftKey,
         metaKey: e.metaKey,
-        // Full event object for debugging
-        fullEvent: {
-          type: e.type,
-          bubbles: e.bubbles,
-          cancelable: e.cancelable,
-          defaultPrevented: e.defaultPrevented,
-          eventPhase: e.eventPhase,
-          timeStamp: e.timeStamp,
-          detail: e.detail,
-          view: e.view ? 'window' : 'null',
-          currentTarget: e.currentTarget ? e.currentTarget.tagName : 'null',
-          target: e.target ? e.target.tagName : 'null',
-          srcElement: e.srcElement ? e.srcElement.tagName : 'null',
-          returnValue: e.returnValue,
-          cancelBubble: e.cancelBubble,
-          composed: e.composed,
-          isTrusted: e.isTrusted,
-          relatedTarget: e.relatedTarget ? e.relatedTarget.tagName : 'null'
-        }
+        // Event behavior properties
+        bubbles: e.bubbles,
+        cancelable: e.cancelable,
+        defaultPrevented: e.defaultPrevented,
+        cancelBubble: e.cancelBubble,
+        composed: e.composed,
+        returnValue: e.returnValue,
+        timeStamp: e.timeStamp,
+        // Target information
+        currentTarget: e.currentTarget ? e.currentTarget.tagName : null,
+        srcElement: e.srcElement ? e.srcElement.tagName : null,
+        view: e.view ? 'window' : null,
+        relatedTarget: e.relatedTarget ? e.relatedTarget.tagName : null
       };
       
       clickEvents.push(eventData);
       
       // Log comprehensive event information
-      logEverywhere("info", "Mouse up at (" + e.clientX + ", " + e.clientY + ") on " + (e.target.id || e.target.tagName));
-      logEverywhere("info", "Synthetic: " + syntheticInfo.isSynthetic + ", Trust: " + syntheticInfo.trustLevel);
-      logEverywhere("debug", "Full mouse up event data", eventData);
+      const eventSummary = e.type.toUpperCase() + " - Position: (" + e.clientX + ", " + e.clientY + ") on " + (e.target.id || e.target.tagName) + " - Trusted: " + e.isTrusted;
+      logEverywhere("info", eventSummary, eventData);
     });
 
     document.addEventListener("mousemove", (e) => {
-      const syntheticInfo = isSyntheticEvent(e);
       
       // Create comprehensive event data
       const eventData = {
+        type: e.type,
         x: e.clientX,
         y: e.clientY,
         target: e.target.id || e.target.tagName,
@@ -781,7 +779,6 @@ app.get('/login', (req, res) => {
         button: e.button,
         buttons: e.buttons,
         isTrusted: e.isTrusted,
-        synthetic: syntheticInfo,
         detail: e.detail,
         eventPhase: e.eventPhase,
         // Additional mouse-specific properties
@@ -797,42 +794,35 @@ app.get('/login', (req, res) => {
         ctrlKey: e.ctrlKey,
         shiftKey: e.shiftKey,
         metaKey: e.metaKey,
-        // Full event object for debugging
-        fullEvent: {
-          type: e.type,
-          bubbles: e.bubbles,
-          cancelable: e.cancelable,
-          defaultPrevented: e.defaultPrevented,
-          eventPhase: e.eventPhase,
-          timeStamp: e.timeStamp,
-          detail: e.detail,
-          view: e.view ? 'window' : 'null',
-          currentTarget: e.currentTarget ? e.currentTarget.tagName : 'null',
-          target: e.target ? e.target.tagName : 'null',
-          srcElement: e.srcElement ? e.srcElement.tagName : 'null',
-          returnValue: e.returnValue,
-          cancelBubble: e.cancelBubble,
-          composed: e.composed,
-          isTrusted: e.isTrusted,
-          relatedTarget: e.relatedTarget ? e.relatedTarget.tagName : 'null'
-        }
+        // Event behavior properties
+        bubbles: e.bubbles,
+        cancelable: e.cancelable,
+        defaultPrevented: e.defaultPrevented,
+        cancelBubble: e.cancelBubble,
+        composed: e.composed,
+        returnValue: e.returnValue,
+        timeStamp: e.timeStamp,
+        // Target information
+        currentTarget: e.currentTarget ? e.currentTarget.tagName : null,
+        srcElement: e.srcElement ? e.srcElement.tagName : null,
+        view: e.view ? 'window' : null,
+        relatedTarget: e.relatedTarget ? e.relatedTarget.tagName : null
       };
       
       clickEvents.push(eventData);
       
       // Log comprehensive event information
-      logEverywhere("info", "Mouse move at (" + e.clientX + ", " + e.clientY + ") on " + (e.target.id || e.target.tagName));
-      logEverywhere("info", "Synthetic: " + syntheticInfo.isSynthetic + ", Trust: " + syntheticInfo.trustLevel);
-      logEverywhere("debug", "Full mouse move event data", eventData);
+      const eventSummary = e.type.toUpperCase() + " - Position: (" + e.clientX + ", " + e.clientY + ") on " + (e.target.id || e.target.tagName) + " - Trusted: " + e.isTrusted;
+      logEverywhere("info", eventSummary, eventData);
     });
 
-    // Track mouse clicks with synthetic detection
+    // Track mouse clicks
     document.addEventListener("click", (e) => {
       userClicked = true;
-      const syntheticInfo = isSyntheticEvent(e);
       
       // Create comprehensive event data
       const eventData = {
+        type: e.type,
         x: e.clientX,
         y: e.clientY,
         target: e.target.id || e.target.tagName,
@@ -840,7 +830,6 @@ app.get('/login', (req, res) => {
         button: e.button,
         buttons: e.buttons,
         isTrusted: e.isTrusted,
-        synthetic: syntheticInfo,
         detail: e.detail,
         eventPhase: e.eventPhase,
         // Additional mouse-specific properties
@@ -856,200 +845,173 @@ app.get('/login', (req, res) => {
         ctrlKey: e.ctrlKey,
         shiftKey: e.shiftKey,
         metaKey: e.metaKey,
-        // Full event object for debugging
-        fullEvent: {
-          type: e.type,
-          bubbles: e.bubbles,
-          cancelable: e.cancelable,
-          defaultPrevented: e.defaultPrevented,
-          eventPhase: e.eventPhase,
-          timeStamp: e.timeStamp,
-          detail: e.detail,
-          view: e.view ? 'window' : 'null',
-          currentTarget: e.currentTarget ? e.currentTarget.tagName : 'null',
-          target: e.target ? e.target.tagName : 'null',
-          srcElement: e.srcElement ? e.srcElement.tagName : 'null',
-          returnValue: e.returnValue,
-          cancelBubble: e.cancelBubble,
-          composed: e.composed,
-          isTrusted: e.isTrusted,
-          relatedTarget: e.relatedTarget ? e.relatedTarget.tagName : 'null'
-        }
+        // Event behavior properties
+        bubbles: e.bubbles,
+        cancelable: e.cancelable,
+        defaultPrevented: e.defaultPrevented,
+        cancelBubble: e.cancelBubble,
+        composed: e.composed,
+        returnValue: e.returnValue,
+        timeStamp: e.timeStamp,
+        // Target information
+        currentTarget: e.currentTarget ? e.currentTarget.tagName : null,
+        srcElement: e.srcElement ? e.srcElement.tagName : null,
+        view: e.view ? 'window' : null,
+        relatedTarget: e.relatedTarget ? e.relatedTarget.tagName : null
       };
       
       clickEvents.push(eventData);
       
       // Log comprehensive event information
-      logEverywhere("info", "Mouse click at (" + e.clientX + ", " + e.clientY + ") on " + (e.target.id || e.target.tagName));
-      logEverywhere("info", "Synthetic: " + syntheticInfo.isSynthetic + ", Trust: " + syntheticInfo.trustLevel);
-      logEverywhere("debug", "Full mouse click event data", eventData);
+      const eventSummary = e.type.toUpperCase() + " - Position: (" + e.clientX + ", " + e.clientY + ") on " + (e.target.id || e.target.tagName) + " - Trusted: " + e.isTrusted;
+      logEverywhere("info", eventSummary, eventData);
     });
 
     // Track scroll events
     document.addEventListener("scroll", (e) => {
-      const syntheticInfo = isSyntheticEvent(e);
       const eventData = {
+        type: e.type,
         target: e.target.id || e.target.tagName,
         timestamp: Date.now(),
         isTrusted: e.isTrusted,
-        synthetic: syntheticInfo,
         scrollX: window.scrollX,
         scrollY: window.scrollY,
-        fullEvent: {
-          type: e.type,
-          bubbles: e.bubbles,
-          cancelable: e.cancelable,
-          defaultPrevented: e.defaultPrevented,
-          eventPhase: e.eventPhase,
-          timeStamp: e.timeStamp,
-          detail: e.detail,
-          view: e.view ? 'window' : 'null',
-          currentTarget: e.currentTarget ? e.currentTarget.tagName : 'null',
-          target: e.target ? e.target.tagName : 'null',
-          srcElement: e.srcElement ? e.srcElement.tagName : 'null',
-          returnValue: e.returnValue,
-          cancelBubble: e.cancelBubble,
-          composed: e.composed,
-          isTrusted: e.isTrusted
-        }
+        // Event behavior properties
+        bubbles: e.bubbles,
+        cancelable: e.cancelable,
+        defaultPrevented: e.defaultPrevented,
+        eventPhase: e.eventPhase,
+        timeStamp: e.timeStamp,
+        detail: e.detail,
+        cancelBubble: e.cancelBubble,
+        composed: e.composed,
+        returnValue: e.returnValue,
+        // Target information
+        currentTarget: e.currentTarget ? e.currentTarget.tagName : null,
+        srcElement: e.srcElement ? e.srcElement.tagName : null,
+        view: e.view ? 'window' : null
       };
       
-      logEverywhere("info", "Scroll event on " + (e.target.id || e.target.tagName) + " at (" + window.scrollX + ", " + window.scrollY + ")");
-      logEverywhere("info", "Synthetic: " + syntheticInfo.isSynthetic + ", Trust: " + syntheticInfo.trustLevel);
-      logEverywhere("debug", "Full scroll event data", eventData);
+      // Log comprehensive event information
+      const eventSummary = e.type.toUpperCase() + " - Position: (" + window.scrollX + ", " + window.scrollY + ") on " + (e.target.id || e.target.tagName) + " - Trusted: " + e.isTrusted;
+      logEverywhere("info", eventSummary, eventData);
     });
 
     // Track focus events
     document.addEventListener("focus", (e) => {
-      const syntheticInfo = isSyntheticEvent(e);
       const eventData = {
+        type: e.type,
         target: e.target.id || e.target.tagName,
         timestamp: Date.now(),
         isTrusted: e.isTrusted,
-        synthetic: syntheticInfo,
-        fullEvent: {
-          type: e.type,
-          bubbles: e.bubbles,
-          cancelable: e.cancelable,
-          defaultPrevented: e.defaultPrevented,
-          eventPhase: e.eventPhase,
-          timeStamp: e.timeStamp,
-          detail: e.detail,
-          view: e.view ? 'window' : 'null',
-          currentTarget: e.currentTarget ? e.currentTarget.tagName : 'null',
-          target: e.target ? e.target.tagName : 'null',
-          srcElement: e.srcElement ? e.srcElement.tagName : 'null',
-          returnValue: e.returnValue,
-          cancelBubble: e.cancelBubble,
-          composed: e.composed,
-          isTrusted: e.isTrusted,
-          relatedTarget: e.relatedTarget ? e.relatedTarget.tagName : 'null'
-        }
+        // Event behavior properties
+        bubbles: e.bubbles,
+        cancelable: e.cancelable,
+        defaultPrevented: e.defaultPrevented,
+        eventPhase: e.eventPhase,
+        timeStamp: e.timeStamp,
+        detail: e.detail,
+        cancelBubble: e.cancelBubble,
+        composed: e.composed,
+        returnValue: e.returnValue,
+        // Target information
+        currentTarget: e.currentTarget ? e.currentTarget.tagName : null,
+        srcElement: e.srcElement ? e.srcElement.tagName : null,
+        view: e.view ? 'window' : null,
+        relatedTarget: e.relatedTarget ? e.relatedTarget.tagName : null
       };
       
-      logEverywhere("info", "Focus event on " + (e.target.id || e.target.tagName));
-      logEverywhere("info", "Synthetic: " + syntheticInfo.isSynthetic + ", Trust: " + syntheticInfo.trustLevel);
-      logEverywhere("debug", "Full focus event data", eventData);
+      // Log comprehensive event information
+      const eventSummary = e.type.toUpperCase() + " - Target: " + (e.target.id || e.target.tagName) + " - Trusted: " + e.isTrusted;
+      logEverywhere("info", eventSummary, eventData);
     });
 
     // Track blur events
     document.addEventListener("blur", (e) => {
-      const syntheticInfo = isSyntheticEvent(e);
       const eventData = {
+        type: e.type,
         target: e.target.id || e.target.tagName,
         timestamp: Date.now(),
         isTrusted: e.isTrusted,
-        synthetic: syntheticInfo,
-        fullEvent: {
-          type: e.type,
-          bubbles: e.bubbles,
-          cancelable: e.cancelable,
-          defaultPrevented: e.defaultPrevented,
-          eventPhase: e.eventPhase,
-          timeStamp: e.timeStamp,
-          detail: e.detail,
-          view: e.view ? 'window' : 'null',
-          currentTarget: e.currentTarget ? e.currentTarget.tagName : 'null',
-          target: e.target ? e.target.tagName : 'null',
-          srcElement: e.srcElement ? e.srcElement.tagName : 'null',
-          returnValue: e.returnValue,
-          cancelBubble: e.cancelBubble,
-          composed: e.composed,
-          isTrusted: e.isTrusted,
-          relatedTarget: e.relatedTarget ? e.relatedTarget.tagName : 'null'
-        }
+        // Event behavior properties
+        bubbles: e.bubbles,
+        cancelable: e.cancelable,
+        defaultPrevented: e.defaultPrevented,
+        eventPhase: e.eventPhase,
+        timeStamp: e.timeStamp,
+        detail: e.detail,
+        cancelBubble: e.cancelBubble,
+        composed: e.composed,
+        returnValue: e.returnValue,
+        // Target information
+        currentTarget: e.currentTarget ? e.currentTarget.tagName : null,
+        srcElement: e.srcElement ? e.srcElement.tagName : null,
+        view: e.view ? 'window' : null,
+        relatedTarget: e.relatedTarget ? e.relatedTarget.tagName : null
       };
       
-      logEverywhere("info", "Blur event on " + (e.target.id || e.target.tagName));
-      logEverywhere("info", "Synthetic: " + syntheticInfo.isSynthetic + ", Trust: " + syntheticInfo.trustLevel);
-      logEverywhere("debug", "Full blur event data", eventData);
+      // Log comprehensive event information
+      const eventSummary = e.type.toUpperCase() + " - Target: " + (e.target.id || e.target.tagName) + " - Trusted: " + e.isTrusted;
+      logEverywhere("info", eventSummary, eventData);
     });
 
     // Track touch events (for mobile devices)
     document.addEventListener("touchstart", (e) => {
-      const syntheticInfo = isSyntheticEvent(e);
       const eventData = {
+        type: e.type,
         target: e.target.id || e.target.tagName,
         timestamp: Date.now(),
         isTrusted: e.isTrusted,
-        synthetic: syntheticInfo,
         touches: e.touches.length,
         changedTouches: e.changedTouches.length,
-        fullEvent: {
-          type: e.type,
-          bubbles: e.bubbles,
-          cancelable: e.cancelable,
-          defaultPrevented: e.defaultPrevented,
-          eventPhase: e.eventPhase,
-          timeStamp: e.timeStamp,
-          detail: e.detail,
-          view: e.view ? 'window' : 'null',
-          currentTarget: e.currentTarget ? e.currentTarget.tagName : 'null',
-          target: e.target ? e.target.tagName : 'null',
-          srcElement: e.srcElement ? e.srcElement.tagName : 'null',
-          returnValue: e.returnValue,
-          cancelBubble: e.cancelBubble,
-          composed: e.composed,
-          isTrusted: e.isTrusted
-        }
+        // Event behavior properties
+        bubbles: e.bubbles,
+        cancelable: e.cancelable,
+        defaultPrevented: e.defaultPrevented,
+        eventPhase: e.eventPhase,
+        timeStamp: e.timeStamp,
+        detail: e.detail,
+        cancelBubble: e.cancelBubble,
+        composed: e.composed,
+        returnValue: e.returnValue,
+        // Target information
+        currentTarget: e.currentTarget ? e.currentTarget.tagName : null,
+        srcElement: e.srcElement ? e.srcElement.tagName : null,
+        view: e.view ? 'window' : null
       };
       
-      logEverywhere("info", "Touch start on " + (e.target.id || e.target.tagName) + " (" + e.touches.length + " touches)");
-      logEverywhere("info", "Synthetic: " + syntheticInfo.isSynthetic + ", Trust: " + syntheticInfo.trustLevel);
-      logEverywhere("debug", "Full touch start event data", eventData);
+      // Log comprehensive event information
+      const eventSummary = e.type.toUpperCase() + " - Target: " + (e.target.id || e.target.tagName) + " (" + e.touches.length + " touches) - Trusted: " + e.isTrusted;
+      logEverywhere("info", eventSummary, eventData);
     });
 
     document.addEventListener("touchend", (e) => {
-      const syntheticInfo = isSyntheticEvent(e);
       const eventData = {
+        type: e.type,
         target: e.target.id || e.target.tagName,
         timestamp: Date.now(),
         isTrusted: e.isTrusted,
-        synthetic: syntheticInfo,
         touches: e.touches.length,
         changedTouches: e.changedTouches.length,
-        fullEvent: {
-          type: e.type,
-          bubbles: e.bubbles,
-          cancelable: e.cancelable,
-          defaultPrevented: e.defaultPrevented,
-          eventPhase: e.eventPhase,
-          timeStamp: e.timeStamp,
-          detail: e.detail,
-          view: e.view ? 'window' : 'null',
-          currentTarget: e.currentTarget ? e.currentTarget.tagName : 'null',
-          target: e.target ? e.target.tagName : 'null',
-          srcElement: e.srcElement ? e.srcElement.tagName : 'null',
-          returnValue: e.returnValue,
-          cancelBubble: e.cancelBubble,
-          composed: e.composed,
-          isTrusted: e.isTrusted
-        }
+        // Event behavior properties
+        bubbles: e.bubbles,
+        cancelable: e.cancelable,
+        defaultPrevented: e.defaultPrevented,
+        eventPhase: e.eventPhase,
+        timeStamp: e.timeStamp,
+        detail: e.detail,
+        cancelBubble: e.cancelBubble,
+        composed: e.composed,
+        returnValue: e.returnValue,
+        // Target information
+        currentTarget: e.currentTarget ? e.currentTarget.tagName : null,
+        srcElement: e.srcElement ? e.srcElement.tagName : null,
+        view: e.view ? 'window' : null
       };
       
-      logEverywhere("info", "Touch end on " + (e.target.id || e.target.tagName) + " (" + e.changedTouches.length + " changed touches)");
-      logEverywhere("info", "Synthetic: " + syntheticInfo.isSynthetic + ", Trust: " + syntheticInfo.trustLevel);
-      logEverywhere("debug", "Full touch end event data", eventData);
+      // Log comprehensive event information
+      const eventSummary = e.type.toUpperCase() + " - Target: " + (e.target.id || e.target.tagName) + " (" + e.changedTouches.length + " changed touches) - Trusted: " + e.isTrusted;
+      logEverywhere("info", eventSummary, eventData);
     });
     
     // On form submit, check behavior
@@ -1187,6 +1149,19 @@ app.post('/api/logs', (req, res) => {
   console.log(logMessage, data);
   
   res.json({ success: true });
+});
+
+// API endpoint to clear the database
+app.delete('/api/logs', (req, res) => {
+  db.run('DELETE FROM logs', (err) => {
+    if (err) {
+      console.error('Error clearing database:', err);
+      res.status(500).json({ error: 'Failed to clear database' });
+    } else {
+      console.log('Database cleared successfully');
+      res.json({ success: true, message: 'Database cleared successfully' });
+    }
+  });
 });
 
 // WebSocket server for fingerprint messages
