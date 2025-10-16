@@ -247,6 +247,57 @@ app.get('/', (req, res) => {
   <script>
   // Logs Display Script (No Event Logging)
   (function() {
+    // Session engagement tracking (main page)
+    (function() {
+      var sessionId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2));
+      var engagedMs = 0;
+      var activeStart = null;
+      function isActive() {
+        return document.visibilityState === 'visible' && document.hasFocus();
+      }
+      function startActive() {
+        if (activeStart == null && isActive()) {
+          activeStart = Date.now();
+        }
+      }
+      function stopActive() {
+        if (activeStart != null) {
+          engagedMs += Date.now() - activeStart;
+          activeStart = null;
+        }
+      }
+      document.addEventListener('visibilitychange', function() {
+        if (isActive()) startActive(); else stopActive();
+      });
+      window.addEventListener('focus', startActive);
+      window.addEventListener('blur', stopActive);
+      // Initialize
+      if (isActive()) startActive();
+      function sendEngagement(reason) {
+        // finalize
+        if (isActive()) stopActive();
+        var payload = {
+          type: 'engagement',
+          message: 'Session engagement (main page) - ' + (reason || 'unload'),
+          data: {
+            sessionId: sessionId,
+            path: location.pathname,
+            engagedMs: engagedMs,
+            timestamp: new Date().toISOString()
+          }
+        };
+        try {
+          var blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+          if (navigator.sendBeacon && navigator.sendBeacon('/api/logs', blob)) return;
+        } catch (e) {}
+        try {
+          fetch('/api/logs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), keepalive: true });
+        } catch (e) {}
+      }
+      window.addEventListener('pagehide', function() { sendEngagement('pagehide'); });
+      window.addEventListener('beforeunload', function() { sendEngagement('beforeunload'); });
+    })();
+
     function loadLogs() {
       const timeRange = document.getElementById('timeRange').value;
       let url = '/api/logs?limit=10000';
@@ -573,6 +624,57 @@ app.get('/login', (req, res) => {
   <script>
   // Bot Detection Script
   (function() {
+    // Session engagement tracking (login page)
+    (function() {
+      var sessionId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2));
+      var engagedMs = 0;
+      var activeStart = null;
+      function isActive() {
+        return document.visibilityState === 'visible' && document.hasFocus();
+      }
+      function startActive() {
+        if (activeStart == null && isActive()) {
+          activeStart = Date.now();
+        }
+      }
+      function stopActive() {
+        if (activeStart != null) {
+          engagedMs += Date.now() - activeStart;
+          activeStart = null;
+        }
+      }
+      document.addEventListener('visibilitychange', function() {
+        if (isActive()) startActive(); else stopActive();
+      });
+      window.addEventListener('focus', startActive);
+      window.addEventListener('blur', stopActive);
+      // Initialize
+      if (isActive()) startActive();
+      function sendEngagement(reason) {
+        // finalize
+        if (isActive()) stopActive();
+        var payload = {
+          type: 'engagement',
+          message: 'Session engagement (login page) - ' + (reason || 'unload'),
+          data: {
+            sessionId: sessionId,
+            path: location.pathname,
+            engagedMs: engagedMs,
+            timestamp: new Date().toISOString()
+          }
+        };
+        try {
+          var blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+          if (navigator.sendBeacon && navigator.sendBeacon('/api/logs', blob)) return;
+        } catch (e) {}
+        try {
+          fetch('/api/logs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), keepalive: true });
+        } catch (e) {}
+      }
+      window.addEventListener('pagehide', function() { sendEngagement('pagehide'); });
+      window.addEventListener('beforeunload', function() { sendEngagement('beforeunload'); });
+    })();
+
     // Logging functions
     function logToPage(message, type = 'info', data = null) {
       // For login page, we'll just log to console since there's no logs display
@@ -668,6 +770,75 @@ app.get('/login', (req, res) => {
     document.addEventListener("keyup", trackKey);
     document.addEventListener("keypress", trackKey);
     
+    // Track input-like events (including programmatic fills visibility via isTrusted)
+    ['beforeinput', 'input', 'change'].forEach(function(evtName) {
+      document.addEventListener(evtName, function(e) {
+        var t = e.target;
+        if (!(t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement)) return;
+        var payload = {
+          type: evtName,
+          target: t.id || t.tagName,
+          name: t.name || null,
+          inputType: e.inputType || null,
+          isTrusted: e.isTrusted,
+          value: t.value,
+          timestamp: Date.now()
+        };
+        logEverywhere('info', (evtName.toUpperCase() + ' on ' + (t.id || t.tagName) + ' - Trusted: ' + e.isTrusted), payload);
+      }, true);
+    });
+
+    // Explicitly track paste contents
+    document.addEventListener('paste', function(e) {
+      var t = e.target;
+      if (!(t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement)) return;
+      var pasted = (e.clipboardData && e.clipboardData.getData('text')) || '';
+      var payload = {
+        type: 'paste',
+        target: t.id || t.tagName,
+        name: t.name || null,
+        isTrusted: e.isTrusted,
+        pasted: pasted,
+        timestamp: Date.now()
+      };
+      logEverywhere('info', ('PASTE on ' + (t.id || t.tagName) + ' - Trusted: ' + e.isTrusted), payload);
+    }, true);
+
+    // Intercept programmatic .value sets on inputs/textareas
+    (function interceptProgrammaticValueSets() {
+      function wrapValueSetter(Ctor) {
+        var desc = Object.getOwnPropertyDescriptor(Ctor.prototype, 'value');
+        if (!desc || !desc.set || !desc.get) return;
+        Object.defineProperty(Ctor.prototype, 'value', {
+          configurable: true,
+          enumerable: desc.enumerable,
+          get: function() { return desc.get.call(this); },
+          set: function(v) {
+            var oldVal = desc.get.call(this);
+            desc.set.call(this, v);
+            try {
+              var target = this;
+              if (target && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) {
+                var payload = {
+                  type: 'programmatic-set',
+                  target: target.id || target.tagName,
+                  name: target.name || null,
+                  oldValue: oldVal,
+                  newValue: v,
+                  timestamp: Date.now()
+                };
+                logEverywhere('info', ('PROGRAMMATIC VALUE SET on ' + (target.id || target.tagName)), payload);
+              }
+            } catch (err) {
+              // ignore
+            }
+          }
+        });
+      }
+      wrapValueSetter(HTMLInputElement);
+      wrapValueSetter(HTMLTextAreaElement);
+    })();
+
     // Track mouse events
     document.addEventListener("mousedown", (e) => {
       userClicked = true;
