@@ -167,6 +167,12 @@ app.get('/', (req, res) => {
     #clearDatabase:hover {
       background-color: #c82333 !important;
     }
+    #copyEventsJson {
+      background-color: #007bff !important;
+    }
+    #copyEventsJson:hover {
+      background-color: #0056b3 !important;
+    }
     .log-entry {
       margin: 2px 0;
       padding: 4px 8px;
@@ -237,6 +243,7 @@ app.get('/', (req, res) => {
       </select>
       <button id="refreshLogs">Refresh Logs</button>
       <button id="clearDatabase">Clear Database</button>
+      <button id="copyEventsJson">Copy All Events as JSON</button>
     </div>
     
     <div id="logsContainer">
@@ -490,6 +497,133 @@ app.get('/', (req, res) => {
           alert('Failed to clear database: ' + err.message);
         });
       }
+    });
+    
+    // Copy all events as JSON button
+    document.getElementById('copyEventsJson').addEventListener('click', function() {
+      // Fetch all logs from the database
+      const timeRange = document.getElementById('timeRange').value;
+      let url = '/api/logs?limit=10000';
+      
+      if (timeRange !== 'all') {
+        const now = new Date();
+        let startTime;
+        
+        switch (timeRange) {
+          case '1h':
+            startTime = new Date(now.getTime() - 60 * 60 * 1000);
+            break;
+          case '6h':
+            startTime = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+            break;
+          case '24h':
+            startTime = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+            break;
+          case '7d':
+            startTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            break;
+        }
+        
+        if (startTime) {
+          url += '&startTime=' + startTime.toISOString();
+        }
+      }
+      
+      fetch(url)
+        .then(response => response.json())
+        .then(logs => {
+          // Process logs to extract event data
+          const events = [];
+          const seenEvents = new Set(); // For deduplication
+          
+          logs.forEach(log => {
+            try {
+              // Only process CLIENT_LOG entries (events from login page)
+              if (log.method === 'CLIENT_LOG' || log.method === 'POST') {
+                const bodyData = JSON.parse(log.body);
+                
+                // Include all CLIENT_LOG entries, whether they have data or not
+                if (bodyData.data || bodyData.message) {
+                  // Create a unique key for deduplication if we have event data
+                  let eventKey = null;
+                  if (bodyData.data) {
+                    const eventData = bodyData.data;
+                    eventKey = JSON.stringify({
+                      type: eventData.type,
+                      target: eventData.target,
+                      timestamp: eventData.timestamp,
+                      key: eventData.key || eventData.code,
+                      x: eventData.x,
+                      y: eventData.y
+                    });
+                  } else {
+                    // For events without detailed data, use message and timestamp
+                    eventKey = JSON.stringify({
+                      message: bodyData.message,
+                      timestamp: log.timestamp
+                    });
+                  }
+                  
+                  // Only add if we haven't seen this exact event
+                  if (!eventKey || !seenEvents.has(eventKey)) {
+                    if (eventKey) seenEvents.add(eventKey);
+                    events.push({
+                      logId: log.id,
+                      logTimestamp: log.timestamp,
+                      logMethod: log.method,
+                      logUrl: log.url,
+                      eventType: bodyData.type || 'info',
+                      eventMessage: bodyData.message,
+                      eventData: bodyData.data || null
+                    });
+                  }
+                }
+              }
+            } catch (e) {
+              // Skip logs that can't be parsed
+            }
+          });
+          
+          // Sort events by timestamp
+          events.sort((a, b) => {
+            const timeA = new Date(a.logTimestamp || a.eventData?.timestamp).getTime();
+            const timeB = new Date(b.logTimestamp || b.eventData?.timestamp).getTime();
+            return timeA - timeB;
+          });
+          
+          // Create JSON output
+          const jsonOutput = JSON.stringify({
+            exportTimestamp: new Date().toISOString(),
+            totalEvents: events.length,
+            timeRange: timeRange,
+            events: events
+          }, null, 2);
+          
+          // Copy to clipboard
+          navigator.clipboard.writeText(jsonOutput).then(function() {
+            alert('Successfully copied ' + events.length + ' unique events to clipboard as JSON!');
+          }).catch(function(err) {
+            // Fallback: create a textarea and copy
+            const textarea = document.createElement('textarea');
+            textarea.value = jsonOutput;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            try {
+              document.execCommand('copy');
+              alert('Successfully copied ' + events.length + ' unique events to clipboard as JSON!');
+            } catch (err) {
+              alert('Failed to copy to clipboard. Please check console for JSON output.');
+              console.log('Events JSON:', jsonOutput);
+            }
+            document.body.removeChild(textarea);
+          });
+        })
+        .catch(err => {
+          console.error('Failed to fetch logs:', err);
+          alert('Failed to fetch logs: ' + err.message);
+        });
     });
   })();
   </script>
