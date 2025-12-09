@@ -538,17 +538,19 @@ app.get('/', (req, res) => {
           
           logs.forEach(log => {
             try {
-              // Only process CLIENT_LOG entries (events from login page)
-              if (log.method === 'CLIENT_LOG' || log.method === 'POST') {
+              // Include all logs that have a body (CLIENT_LOG, POST, etc.)
+              if (log.body && log.body.trim() !== '') {
                 const bodyData = JSON.parse(log.body);
                 
-                // Include all CLIENT_LOG entries, whether they have data or not
-                if (bodyData.data || bodyData.message) {
+                // Include all logs with event data or message, or any CLIENT_LOG/POST
+                if (bodyData.data || bodyData.message || log.method === 'CLIENT_LOG' || log.method === 'POST') {
                   // Create a unique key for deduplication if we have event data
                   let eventKey = null;
                   if (bodyData.data) {
                     const eventData = bodyData.data;
+                    // Use logId as part of key to ensure uniqueness per log entry
                     eventKey = JSON.stringify({
+                      logId: log.id,
                       type: eventData.type,
                       target: eventData.target,
                       timestamp: eventData.timestamp,
@@ -557,14 +559,15 @@ app.get('/', (req, res) => {
                       y: eventData.y
                     });
                   } else {
-                    // For events without detailed data, use message and timestamp
+                    // For events without detailed data, use logId, message and timestamp
                     eventKey = JSON.stringify({
+                      logId: log.id,
                       message: bodyData.message,
                       timestamp: log.timestamp
                     });
                   }
                   
-                  // Only add if we haven't seen this exact event
+                  // Only add if we haven't seen this exact event (using logId ensures each log entry is unique)
                   if (!eventKey || !seenEvents.has(eventKey)) {
                     if (eventKey) seenEvents.add(eventKey);
                     events.push({
@@ -573,21 +576,67 @@ app.get('/', (req, res) => {
                       logMethod: log.method,
                       logUrl: log.url,
                       eventType: bodyData.type || 'info',
-                      eventMessage: bodyData.message,
-                      eventData: bodyData.data || null
+                      eventMessage: bodyData.message || (log.method + ' ' + log.url),
+                      eventData: bodyData.data || null,
+                      rawBody: log.body
                     });
                   }
                 }
               }
             } catch (e) {
-              // Skip logs that can't be parsed
+              // If JSON parsing fails, still include the log entry
+              events.push({
+                logId: log.id,
+                logTimestamp: log.timestamp,
+                logMethod: log.method,
+                logUrl: log.url,
+                eventType: 'raw',
+                eventMessage: log.method + ' ' + log.url,
+                eventData: null,
+                rawBody: log.body,
+                parseError: e.message
+              });
             }
           });
           
-          // Sort events by timestamp
+          // Sort events by timestamp (ascending - oldest first)
+          // Use a more reliable sorting approach
           events.sort((a, b) => {
-            const timeA = new Date(a.logTimestamp || a.eventData?.timestamp).getTime();
-            const timeB = new Date(b.logTimestamp || b.eventData?.timestamp).getTime();
+            // Priority 1: Use logTimestamp (database timestamp)
+            let timeA = null;
+            let timeB = null;
+            
+            if (a.logTimestamp) {
+              const dateA = new Date(a.logTimestamp);
+              if (!isNaN(dateA.getTime())) {
+                timeA = dateA.getTime();
+              }
+            }
+            
+            if (b.logTimestamp) {
+              const dateB = new Date(b.logTimestamp);
+              if (!isNaN(dateB.getTime())) {
+                timeB = dateB.getTime();
+              }
+            }
+            
+            // Priority 2: Use eventData.timestamp if logTimestamp not available
+            if (timeA === null && a.eventData && a.eventData.timestamp) {
+              const ts = a.eventData.timestamp;
+              timeA = typeof ts === 'number' ? ts : new Date(ts).getTime();
+              if (isNaN(timeA)) timeA = null;
+            }
+            
+            if (timeB === null && b.eventData && b.eventData.timestamp) {
+              const ts = b.eventData.timestamp;
+              timeB = typeof ts === 'number' ? ts : new Date(ts).getTime();
+              if (isNaN(timeB)) timeB = null;
+            }
+            
+            // Priority 3: Fallback to logId (sequential, so good for ordering)
+            if (timeA === null) timeA = a.logId || 0;
+            if (timeB === null) timeB = b.logId || 0;
+            
             return timeA - timeB;
           });
           
